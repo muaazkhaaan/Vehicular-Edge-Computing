@@ -52,3 +52,25 @@ HAP = {
     'coverage': l,  # The HAP covers the entire road length
     'max_tasks': 5
 }
+
+def can_interact_with_rsu(VU, RSUs):
+    can_interact = False
+    interactable_RSUs = []
+    for rsu_id, rsu in RSUs.items():
+        distance = abs(VU['position'] - rsu['position'])
+        if distance <= rsu['coverage']:
+            can_interact = True
+            interactable_RSUs.append(rsu_id)
+    return can_interact, interactable_RSUs
+
+# Calculate the distance a VU has before leaving the coverage radius of the nearest RSU it can interact with
+def distance_before_leaving_coverage(VU, RSUs):
+    distance_to_rsu_center = abs(VU['position'] - RSU['position'])
+    if distance_to_rsu_center <= RSU['coverage']:
+        if VU['direction'] == 'right':
+            distance_to_rsu_edge = (RSU['position'] + RSU['coverage']) - VU['position']
+        else:  # VU direction is 'left'
+            distance_to_rsu_edge = VU['position'] - (RSU['position'] - RSU['coverage'])
+        return distance_to_rsu_edge
+    else:
+        return None  # VU is not within the RSU's coverage
