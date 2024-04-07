@@ -12,24 +12,35 @@ RSU_GFLOPS = 80  # GFLOPS for RSUs
 RSU_coverage = 20  # Coverage radius in meters for RSUs
 HAP_GFLOPS = 50  # GFLOPS for HAP
 
-# Number of tasks
-num_tasks = 20  
+# Maximum number of tasks a VU can have
+max_tasks_per_VU = 5
 
-# Initialize VUs with their properties, randomly place them on the road, and assign a random direction
-VUs = {
-    f'VU_{i+1}': {
+# Initialize VUs with their properties, randomly place them on the road, assign a random direction, and generate their tasks
+VUs = {}
+for i in range(VU_m):
+    vu_id = f'VU_{i+1}'
+    num_tasks = random.randint(1, max_tasks_per_VU)  # Random number of tasks for each VU
+    tasks = [{
+        'id': f'Task {j+1}',
+        'size_MB': random.randint(1, 5),  # Size in MB
+        'max_latency_ms': random.randint(100, 5000)  # Max required latency in ms
+    } for j in range(num_tasks)]
+    VUs[vu_id] = {
         'speed': VU_speed,
         'GFLOPS': VU_GFLOPS,
         'position': random.uniform(0, l),
-        'direction': random.choice(['left', 'right'])  
-    } for i in range(VU_m)
-}
+        'direction': random.choice(['left', 'right']),
+        'tasks': tasks
+    }
 
-# Initialize RSUs with their properties and randomly place them on the road
+# Calculate the interval between RSUs
+interval = l / (RSU_n + 1)
+
+# Initialize RSUs with their properties and place them evenly along the road
 RSUs = {
     f'RSU_{i+1}': {
         'GFLOPS': RSU_GFLOPS,
-        'position': random.uniform(0, l),
+        'position': interval * (i + 1),  # Position each RSU at equal intervals
         'coverage': RSU_coverage,
         'max_tasks': 10
     } for i in range(RSU_n)
@@ -41,12 +52,3 @@ HAP = {
     'coverage': l,  # The HAP covers the entire road length
     'max_tasks': 5
 }
-
-# Generate tasks with size and max required latency
-tasks = [
-    {
-        'id': f'Task {i+1}',
-        'size_MB': random.randint(1, 5),  # Size in MB
-        'max_latency_ms': random.randint(100, 5000)  # Max required latency in ms
-    } for i in range(num_tasks)
-]
