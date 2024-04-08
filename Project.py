@@ -103,3 +103,42 @@ def calculate_latency(task, VU, RSUs, HAP, Bandwidth_uplink=10, Bandwidth_downli
         'RSU_latency': rsu_total_latency,
         'HAP_latency': hap_total_latency
     }
+    
+def offload_tasks(VUs, RSUs, HAP):
+    offloading_decisions = []
+
+    for vu_id, VU in VUs.items():
+        for task in VU['tasks']:
+            latencies = calculate_latency(task, VU, RSUs, HAP)
+            valid_rsus = find_valid_rsu(VU, RSUs)
+
+            # Initially set decision to VU offloading with its latency
+            decision_info = {'vu_id': vu_id, 'vu_position': VU['position'], 'task_id': task['id'], 'offloading_type': 0, 'estimated_latency_ms': latencies['VU_latency']}
+
+            # Update decision if RSU offloading is valid and offers lower latency without exceeding max allowed latency
+            if any(rsu['sojourn_time'] >= latencies['RSU_latency'] for rsu in valid_rsus) and latencies['RSU_latency'] < decision_info['estimated_latency_ms'] and latencies['RSU_latency'] <= task['max_latency_ms']:
+                decision_info.update({'offloading_type': 1, 'estimated_latency_ms': latencies['RSU_latency']})
+
+            # Update decision if HAP offloading offers the lowest latency without exceeding max allowed latency
+            if latencies['HAP_latency'] < decision_info['estimated_latency_ms'] and latencies['HAP_latency'] <= task['max_latency_ms']:
+                decision_info.update({'offloading_type': 2, 'estimated_latency_ms': latencies['HAP_latency']})
+
+            offloading_decisions.append(decision_info)
+
+    return offloading_decisions
+
+
+
+
+
+
+
+for vu_id, VU in VUs.items():
+    valid_rsu_results = find_valid_rsu(VU, RSUs)
+    print(f"Results for {vu_id}:")
+    for result in valid_rsu_results:
+        print(f"  RSU {result['rsu_id']} is valid with sojourn time {result['sojourn_time']} ms and distance to leave coverage {result['distance_to_leave_coverage']} meters.")
+
+offloading_decisions = offload_tasks(VUs, RSUs, HAP)
+for decision in offloading_decisions:
+    print(decision)
