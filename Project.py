@@ -23,7 +23,7 @@ for i in range(VU_m):
     tasks = [{
         'id': f'Task {j+1}',
         'size_MB': random.randint(1, 5),  # Size in MB
-        'max_latency_ms': random.randint(100, 5000)  # Max required latency in ms
+        'max_latency_ms': random.randint(100, 10000)  # Max required latency in ms
     } for j in range(num_tasks)]
     VUs[vu_id] = {
         'speed': VU_speed,
@@ -53,7 +53,7 @@ HAP = {
     'max_tasks': 5
 }
 
-def find_rsu_and_calculate_distance(VU, RSUs):
+def find_valid_rsu(VU, RSUs):
     results = []
     for rsu_id, rsu in RSUs.items():
         distance_to_rsu_center = abs(VU['position'] - rsu['position'])
@@ -63,12 +63,43 @@ def find_rsu_and_calculate_distance(VU, RSUs):
                 distance_to_rsu_edge = (rsu['position'] + rsu['coverage']) - VU['position']
             else:  # VU direction is 'left'
                 distance_to_rsu_edge = VU['position'] - (rsu['position'] - rsu['coverage'])
+                
+            sojourn_time = (abs(distance_to_rsu_edge) / VU['speed']) * 1000 # sojourn time in ms
             
             results.append({
                 'rsu_id': rsu_id,
                 'rsu_details': rsu,
-                'distance_to_leave_coverage': distance_to_rsu_edge
+                'distance_to_leave_coverage': distance_to_rsu_edge,
+                'sojourn_time': sojourn_time
             })
 
     return results
 
+def calculate_latency(task, VU, RSUs, HAP, Bandwidth_uplink=10, Bandwidth_downlink=20):
+    # Correctly convert bandwidth from Gbps to bps for calculation
+    Bandwidth_uplink_bps = Bandwidth_uplink * 10**9
+    Bandwidth_downlink_bps = Bandwidth_downlink * 10**9
+
+    # Convert task_MB into bits for calculation
+    task_bits = task['size_MB'] * 8 * 10**6
+
+    # Calculate uplink and downlink transmission latency (in ms)
+    uplink_latency = (task_bits / Bandwidth_uplink_bps) * 1000  # Convert seconds to milliseconds
+    downlink_latency = (task_bits / Bandwidth_downlink_bps) * 1000  # Convert seconds to milliseconds
+    
+    # VU Processing Latency (No transmission latency considered)
+    vu_processing_latency = ((1000* task_bits) / (VU['GFLOPS'] * 10**9)) * 1000  
+    
+    # Assuming RSU is chosen based on coverage and load; similarly for HAP
+    rsu_processing_latency = ((1000 * task_bits) / (RSU_GFLOPS * 10**9)) * 1000
+    hap_processing_latency = ((1000 * task_bits) / (HAP_GFLOPS * 10**9)) * 1000
+    
+    # Total latency for offloading to RSU and HAP includes transmission and processing latencies
+    rsu_total_latency = uplink_latency + rsu_processing_latency + downlink_latency
+    hap_total_latency = uplink_latency + hap_processing_latency + downlink_latency
+    
+    return {
+        'VU_latency': vu_processing_latency,
+        'RSU_latency': rsu_total_latency,
+        'HAP_latency': hap_total_latency
+    }
