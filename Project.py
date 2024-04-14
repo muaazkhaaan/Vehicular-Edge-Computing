@@ -62,9 +62,9 @@ def find_valid_rsu(VU, RSUs):
             distance_to_rsu_edge = None
             if VU['direction'] == 'right':
                 distance_to_rsu_edge = (rsu['position'] + rsu['coverage']) - VU['position']
-            else:  # VU direction is 'left'
+            else:  # VU direction is left
                 distance_to_rsu_edge = VU['position'] - (rsu['position'] - rsu['coverage'])
-                
+                ''
             sojourn_time = (abs(distance_to_rsu_edge) / VU['speed']) * 1000 # sojourn time in ms
             
             results.append({
@@ -84,9 +84,9 @@ def calculate_latency(task, VU, RSUs, HAP, Bandwidth_uplink=10, Bandwidth_downli
     # Convert task_MB into bits for calculation
     task_bits = task['size_MB'] * 8 * 10**6
 
-    # Calculate uplink and downlink transmission latency (in ms)
-    uplink_latency = (task_bits / Bandwidth_uplink_bps) * 1000  # Convert seconds to milliseconds
-    downlink_latency = (task_bits / (5 *Bandwidth_downlink_bps)) * 1000  # Convert seconds to milliseconds
+    # Calculate uplink and downlink transmission latency in ms
+    uplink_latency = (task_bits / Bandwidth_uplink_bps) * 1000  # Convert seconds to ms
+    downlink_latency = (task_bits / (5 *Bandwidth_downlink_bps)) * 1000  # Convert seconds to ms
     
     # VU Processing Latency (No transmission latency considered)
     vu_processing_latency = ((1000* task_bits) / (VU['GFLOPS'] * 10**9)) * 1000  
@@ -115,7 +115,7 @@ for vu_id, VU in VUs.items():
 
 # Initialize the priority queue
 task_priority_queue = []
-# Initialize RSU task counts. Assume RSUs is a dict of RSU details.
+# Initialize RSU task counts
 rsu_task_counts = {rsu_id: 0 for rsu_id in RSUs}
 
 # Initialize HAP task count
@@ -178,7 +178,7 @@ def offload_tasks_sorted(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_p
                 heapq.heappush(task_priority_queue, (task['max_latency_ms'], {'vu_id': vu_id, 'task': task}))
 
     # Return the decisions, updated task counts for RSUs and HAP, and the task priority queue
-    return offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue
+    return offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue 
 
 def update_vehicle_positions(VUs, elapsed_time_sec):
     for vu_id, vu in VUs.items():
@@ -189,92 +189,122 @@ def update_vehicle_positions(VUs, elapsed_time_sec):
         if direction == 'right':
             # Update position, ensuring the VU doesn't go beyond the road length l
             vu['position'] = min(vu['position'] + distance_moved, l)
-        else:  # Assuming direction is 'left'
+        else:  # Assuming direction is left
             # Update position, ensuring the VU doesn't move past the start of the road
             vu['position'] = max(vu['position'] - distance_moved, 0)
 
+offloading_decisions = offload_tasks_sorted(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue)
 
-# def simulate(VUs, RSUs, HAP, task_priority_queue, total_simulation_duration_ms=10000, time_step_ms=510):
-#     simulation_time_ms = 0
-#     active_tasks = []  # List to track ongoing tasks with their completion times
+# Print offloading decisions for review
+for decision in offloading_decisions:
+    print(decision,'\n')
 
-#     while simulation_time_ms < total_simulation_duration_ms:
-#         # Update vehicle positions
-#         update_vehicle_positions(VUs, time_step_ms / 1000.0)
-        
-#         # Check and update RSU/HAP counters based on task completions
-#         check_and_update_task_completions(active_tasks, simulation_time_ms, rsu_task_counts, hap_task_count)
-        
-#         # Process the priority queue and attempt to offload tasks
-#         offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue, new_active_tasks = offload_tasks_sorted(
-#             VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, simulation_time_ms)
-        
-#         # Add new active tasks to the tracking list
-#         active_tasks.extend(new_active_tasks)
-        
-#         simulation_time_ms += time_step_ms
+
+def offload_remaining_tasks(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue):
+    # Reset counters 
+    rsu_task_counts = {rsu_id: 0 for rsu_id in RSUs}
+    hap_task_count = 0
+    # Temporary storage for offloading decisions
+    new_offloading_decisions = []
     
-#     return offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue
+    # Work on a copy of the queue to avoid modifying the queue during iteration
+    tasks_to_revaluate = list(task_priority_queue)
+    print("tasks to reeval", tasks_to_revaluate)
+    
+    # Check if there are no tasks to reevaluate
+    if not tasks_to_revaluate:
+        print("No tasks to reevaluate, exiting function.")
+        return new_offloading_decisions, rsu_task_counts, hap_task_count
+    
+    # Clear the original priority queue and re-insert tasks if they still can't be offloaded
+    task_priority_queue.clear()
+
+    while tasks_to_revaluate:
+        # Pop the task with the highest priority (smallest max_latency_ms)
+        max_latency_ms, task_info = heapq.heappop(tasks_to_revaluate)
+        vu_id = task_info['vu_id']
+        task = task_info['task']
+        VU = VUs[vu_id]
+
+        # Calculate latencies for the current task
+        latencies = calculate_latency(task, VU, RSUs, HAP)
+        print("latency:", latencies)
+        valid_rsus = find_valid_rsu(VU, RSUs)
+        print("valid rsu:", valid_rsus)
+
+        # Initially set to not having made a decision
+        decision_made = False
+
+        # Attempt RSU offloading again
+        for rsu in valid_rsus:
+            if latencies['RSU_latency'] <= task['max_latency_ms'] and rsu_task_counts[rsu['rsu_id']] < RSUs[rsu['rsu_id']]['max_tasks']:
+                new_offloading_decisions.append({
+                    'vu_id': vu_id, 'task_id': task['id'],
+                    'offloading_type': 'RSU', 'estimated_latency_ms': latencies['RSU_latency'],
+                    'rsu_id': rsu['rsu_id']
+                })
+                rsu_task_counts[rsu['rsu_id']] += 1
+                decision_made = True
+                break
+
+        # Attempt HAP offloading again
+        if not decision_made and hap_task_count < HAP['max_tasks'] and latencies['HAP_latency'] <= task['max_latency_ms']:
+            new_offloading_decisions.append({
+                'vu_id': vu_id, 'task_id': task['id'],
+                'offloading_type': 'HAP', 'estimated_latency_ms': latencies['HAP_latency']
+            })
+            hap_task_count += 1
+            decision_made = True
+
+        # Attempt local VU processing again
+        if not decision_made and latencies['VU_latency'] <= task['max_latency_ms']:
+            new_offloading_decisions.append({
+                'vu_id': vu_id, 'task_id': task['id'],
+                'offloading_type': 'VU', 'estimated_latency_ms': latencies['VU_latency']
+            })
+            decision_made = True
+
+        # If no offloading option is viable, push the task back into the priority queue
+        if not decision_made:
+            heapq.heappush(task_priority_queue, (task['max_latency_ms'], {'vu_id': vu_id, 'task': task}))
+
+    # Return the new offloading decisions and updated task counts
+    return new_offloading_decisions, rsu_task_counts, hap_task_count
 
 
 
-# # Print offloading decisions for review
-# for decision in offloading_decisions:
-#     print(decision)
-# print(task_priority_queue)
+import time
+
+def simulate(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, total_simulation_time_ms):
+    current_time_ms = 0
+    timestep_ms = 54.5
+
+    # Continue the simulation for the specified total simulation time
+    while current_time_ms <= total_simulation_time_ms and task_priority_queue:
+        print(current_time_ms)
+        # Offload tasks that are currently in the priority queue
+        offloading_decisions, rsu_task_counts, hap_task_count = offload_remaining_tasks(
+            VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue
+        )
+
+        # Update the environment?? here or earlier??
+
+        # Wait for the next time step
+        time.sleep(timestep_ms / 1000.0)  # Convert milliseconds to seconds for sleep function
+        current_time_ms += timestep_ms
+        print(offloading_decisions)
+        print("rsu", rsu_task_counts)
+        print("hap", hap_task_count)
+    
+    return rsu_task_counts, hap_task_count, task_priority_queue
+
+
+rsu_task_counts_final, hap_task_count_final, task_priority_queue_final = simulate(
+    VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, total_simulation_time_ms=550
+)
+
+print("done")
+print(task_priority_queue)
 
 
 
-
-
-
-
-
-
-# def update_vehicle_positions(VUs, time_step_seconds):
-#     for vu_id, vu_details in VUs.items():
-#         # Calculate the distance moved in this time step
-#         distance_moved = vu_details['speed'] * time_step_seconds
-
-#         if vu_details['direction'] == 'right':
-#             # Move to the right, ensure not exceeding road length
-#             vu_details['position'] += distance_moved
-#             vu_details['position'] = min(vu_details['position'], l)
-#         else:
-#             # Move to the left, ensure not going below 0
-#             vu_details['position'] -= distance_moved
-#             vu_details['position'] = max(vu_details['position'], 0)
-
-
-# def offload_tasks_until_queue_empty(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, time_step_ms):
-#     current_time = 0
-#     total_simulation_time = 510000  # Example: total time you want the simulation to run (in ms)
-
-#     while current_time < total_simulation_time and task_priority_queue:
-#         rsu_task_counts = 0 
-#         hap_task_count = 0
-        
-#         # Update vehicle positions based on the elapsed time
-#         update_vehicle_positions(VUs, time_step_ms / 1000.0)  # Convert ms to seconds
-
-#         # Attempt to offload tasks at the current time step
-#         offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue = offload_tasks_sorted(
-#             VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue)
-
-#         # Increment the simulation time
-#         current_time += time_step_ms
-
-#         # Optional: Here, you could also decrement task counters for RSUs and HAP based on task completions
-#         # This would require keeping track of task durations and completion times.
-
-#     return offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue, current_time
-
-# offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue, current_time = offload_tasks_until_queue_empty(
-#     VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, time_step_ms=510)
-
-# # After calling the function, print the results:
-# print(f"Offloading Decisions (summary): {len(offloading_decisions)} decisions made.")
-# print("Final RSU Task Counts:", rsu_task_counts)
-# print("Final HAP Task Count:", hap_task_count)
-# print(f"Tasks remaining in the priority queue: {len(task_priority_queue)}")
-# print(f"Total simulation time: {current_time} ms")
