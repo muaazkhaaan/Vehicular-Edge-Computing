@@ -1,80 +1,47 @@
 import random
+import networkx as nx
 import heapq
 
-# Define the number of Vehicle Units (VUs), Roadside Units (RSUs), and road length (l) in meters
-VU_m = 10
-RSU_n = 8
-l = 1000
-
-# Define the properties of VUs and RSUs
-VU_speed = 6  # m/s for VUs
+# Define constants
+VU_m = 2  # Number of Vehicle Units (VUs)
+RSU_n = 3  # Number of Roadside Units (RSUs)
+l = 50  # Road length in meters
+VU_speed = 6  # Speed of VUs in m/s
 VU_GFLOPS = 8  # GFLOPS for VUs
 RSU_GFLOPS = 80  # GFLOPS for RSUs
 RSU_coverage = 20  # Coverage radius in meters for RSUs
 HAP_GFLOPS = 150  # GFLOPS for HAP
+max_tasks_per_VU = 40 # Maximum number of tasks a VU can have
 
-# Maximum number of tasks a VU can have
-max_tasks_per_VU = 5
-
-# Initialize VUs with their properties, randomly place them on the road, assign a random direction, and generate their tasks
-VUs = {}
-for i in range(VU_m):
-    vu_id = f'VU_{i+1}'
-    num_tasks = random.randint(1, max_tasks_per_VU)  # Random number of tasks for each VU
-    tasks = [{
+# Initialise the properties of VUs, RSUs, and HAP
+VUs = {f'VU_{i+1}': {
+    'speed': VU_speed,
+    'GFLOPS': VU_GFLOPS,
+    'position': random.uniform(0, l),
+    'direction': random.choice(['left', 'right']),
+    'tasks': [{
         'id': f'Task {j+1}',
-        'size_MB': random.randint(1, 5),  # Size in MB
-        'max_latency_ms': random.randint(300, 10000)  # Max required latency in ms
-    } for j in range(num_tasks)]
-    VUs[vu_id] = {
-        'speed': VU_speed,
-        'GFLOPS': VU_GFLOPS,
-        'position': random.uniform(0, l),
-        'direction': random.choice(['left', 'right']),
-        'tasks': tasks
-    }
+        'size_MB': random.randint(1, 5), # Task size in Mb
+        'max_latency_ms': random.randint(300, 10000) # Max latency of task
+    } for j in range(random.randint(1, max_tasks_per_VU))],
+    'task_count': 0,  # Track number of tasks currently being offloaded
+    'max_tasks': 1   # VUs can only offload one task at a time
+} for i in range(VU_m)}
 
-# Calculate the interval between RSUs
-interval = l / (RSU_n + 1)
+RSUs = {f'RSU_{i+1}': {
+    'GFLOPS': RSU_GFLOPS,
+    'position': (i + 1) * (l / (RSU_n + 1)), # Spread the RSUs equally across the road
+    'coverage': RSU_coverage,
+    'max_tasks': 5,
+    'task_count': 0
+} for i in range(RSU_n)}
 
-# Initialize RSUs with their properties and place them evenly along the road
-RSUs = {
-    f'RSU_{i+1}': {
-        'GFLOPS': RSU_GFLOPS,
-        'position': interval * (i + 1),  # Position each RSU at equal intervals
-        'coverage': RSU_coverage,
-        'max_tasks': 10
-    } for i in range(RSU_n)
-}
-
-# Define the HAP with its properties
 HAP = {
-    'GFLOPS': HAP_GFLOPS,  # Computational capacity of the HAP
-    'coverage': l,  # The HAP covers the entire road length
-    'max_tasks': 5
+    'GFLOPS': HAP_GFLOPS,
+    'coverage': l,
+    'max_tasks': 2,
+    'task_count': 0
 }
-
-def find_valid_rsu(VU, RSUs):
-    results = []
-    for rsu_id, rsu in RSUs.items():
-        distance_to_rsu_center = abs(VU['position'] - rsu['position'])
-        if distance_to_rsu_center <= rsu['coverage']:
-            distance_to_rsu_edge = None
-            if VU['direction'] == 'right':
-                distance_to_rsu_edge = (rsu['position'] + rsu['coverage']) - VU['position']
-            else:  # VU direction is left
-                distance_to_rsu_edge = VU['position'] - (rsu['position'] - rsu['coverage'])
-            
-            sojourn_time = (abs(distance_to_rsu_edge) / VU['speed']) * 1000 # sojourn time in ms
-            
-            results.append({
-                'rsu_id': rsu_id,
-                'rsu_details': rsu,
-                'distance_to_leave_coverage': distance_to_rsu_edge,
-                'sojourn_time': sojourn_time
-            })
-
-    return results
 
 def calculate_latency(task, VU, RSUs, HAP, Bandwidth_uplink=10, Bandwidth_downlink=20):
     # Correctly convert bandwidth from Gbps to bps for calculation
@@ -105,230 +72,191 @@ def calculate_latency(task, VU, RSUs, HAP, Bandwidth_uplink=10, Bandwidth_downli
         'HAP_latency': hap_total_latency
     }
 
+def find_valid_rsu(VU, RSUs):
+    best_rsu = None
+    min_distance_to_leave_coverage = float('inf')  # Initialise with a very large number
+
+    for rsu_id, rsu in RSUs.items():
+        distance_to_rsu_center = abs(VU['position'] - rsu['position'])
+        if distance_to_rsu_center <= rsu['coverage']:
+            if VU['direction'] == 'right':
+                distance_to_leave_coverage = (rsu['position'] + rsu['coverage']) - VU['position']
+            else:  # VU direction is left
+                distance_to_leave_coverage = VU['position'] - (rsu['position'] - rsu['coverage'])
+            
+            # Calculate sojourn time in milliseconds
+            sojourn_time = (abs(distance_to_leave_coverage) / VU['speed']) * 1000
+            
+            # Check if this RSU is the nearest one within coverage the VU will interact with
+            if distance_to_leave_coverage < min_distance_to_leave_coverage:
+                min_distance_to_leave_coverage = distance_to_leave_coverage
+                best_rsu = {
+                    'rsu_id': rsu_id,
+                    'rsu_details': rsu,
+                    'distance_to_leave_coverage': distance_to_leave_coverage,
+                    'sojourn_time': sojourn_time
+                }
+
+    return best_rsu
+
+def create_offloading_graph(VUs, RSUs, HAP):
+    G = nx.DiGraph()
+    for vu_id, vu in VUs.items():
+        for task in vu['tasks']:
+            task_node = f"{vu_id}_{task['id']}"
+            G.add_node(task_node)
+            latencies = calculate_latency(task, vu, RSUs, HAP)
+
+            valid_rsu = find_valid_rsu(vu, RSUs)
+            if valid_rsu and latencies['RSU_latency'] <= task['max_latency_ms']:
+                rsu_id = valid_rsu['rsu_id']  
+                G.add_edge(task_node, rsu_id, weight=latencies['RSU_latency'], type='RSU')
+
+            if latencies['HAP_latency'] <= task['max_latency_ms']:
+                G.add_edge(task_node, "HAP", weight=latencies['HAP_latency'], type='HAP')
+
+    return G
+
+def print_sol(graph):
+    # Display nodes
+    print("Nodes in the graph:")
+    print(list(graph.nodes()))
+    
+    # Display edges
+    print("Edges in the graph:")
+    print(list(graph.edges(data=True)))
+    
+    return list(graph.nodes())
+
+# Create the graph
+graph = create_offloading_graph(VUs, RSUs, HAP)
+
+# Print graph
+solution = print_sol(graph)
+
+# import matplotlib.pyplot as plt
+
+# # Set node colors based on type
+# color_map = []
+# for node in graph:
+#     if 'VU' in node:
+#         color_map.append('pink')
+#     elif 'RSU' in node:
+#         color_map.append('lightgreen')
+#     elif 'HAP' in node:
+#         color_map.append('salmon')
+#     else:  # Task nodes
+#         color_map.append('lightgrey')
+
+# # Set node sizes based on type
+# size_map = []
+# for node in graph:
+#     if 'VU' in node or 'RSU' in node or 'HAP' in node:
+#         size_map.append(700)
+#     else:  # Task nodes
+#         size_map.append(300)
+
+# # Use a spring layout for spreading nodes evenly
+# pos = nx.spring_layout(graph, k=0.15, iterations=20)
+
+# # Draw the network
+# nx.draw(graph, pos, node_color=color_map, node_size=size_map, with_labels=True, font_size=8)
+
+# # Show the plot
+# plt.show()
+
+def offload_task(G, task_node, capacity):
+    edges = list(G.out_edges(task_node, data=True))
+    random.shuffle(edges)  # Randomise edge selection to prevent bias
+    for edge in edges:
+        _, target, data = edge
+        if target.startswith('RSU') and capacity[target] < 10 or target == 'HAP' and capacity[target] < 5:
+            capacity[target] += 1
+            return target, data['weight']
+
+    return None, None  # If no valid offload found
+
+def generate_initial_solution(G):
+    solution = {}
+    capacity = {'HAP': 0, **{f'RSU_{i}': 0 for i in range(1, RSU_n + 1)}}
+
+    tasks_to_remove = []
+    for task_node in G.nodes():
+        target, weight = offload_task(G, task_node, capacity)
+        if target:
+            solution[task_node] = (target, weight)
+            tasks_to_remove.append(task_node)
+        else:
+            print(f"Task {task_node} could not be offloaded due to capacity limits.")
+
+    # Remove tasks that have been offloaded from the graph
+    G.remove_nodes_from(tasks_to_remove)
+    
+    return solution, bool(tasks_to_remove)
+
+
 def update_vehicle_positions(VUs, elapsed_time_sec):
     for vu_id, vu in VUs.items():
-        speed = vu['speed']  # Speed in meters per second
+        speed = vu['speed']
         direction = vu['direction']
-        distance_moved = speed * elapsed_time_sec  # Distance moved in the elapsed time
-        
+        distance_moved = speed * elapsed_time_sec
         if direction == 'right':
-            # Update position, ensuring the VU doesn't go beyond the road length l
             vu['position'] = min(vu['position'] + distance_moved, l)
-        else:  # Assuming direction is left
-            # Update position, ensuring the VU doesn't move past the start of the road
+            print(vu['position'])
+        else:
             vu['position'] = max(vu['position'] - distance_moved, 0)
-
-
-# Initialize the priority queue
-task_priority_queue = []
-# Initialize RSU task counts
-rsu_task_counts = {rsu_id: 0 for rsu_id in RSUs}
-
-# Initialize HAP task count
-hap_task_count = 0
-
-# Initialize latency timer
-total_latency = 0
-
-def offload_tasks_sorted(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, total_latency):
-    # Gather all tasks with their VU and task details
-    all_tasks = []
-    for vu_id, VU in VUs.items():
-        for task in VU['tasks']:
-            all_tasks.append((task['max_latency_ms'], vu_id, task))
+            print(vu['position'])
     
-    # Sort tasks by their max latency in ascending order
-    all_tasks.sort(key=lambda x: x[0])
-    
-    offloading_decisions = []
-    # Iterate over sorted tasks to make offloading decisions
-    for max_latency_ms, vu_id, task in all_tasks:
-        VU = VUs[vu_id]  # Get the VU details
-
-        # Calculate latencies for current task
-        latencies = calculate_latency(task, VU, RSUs, HAP)
-        valid_rsus = find_valid_rsu(VU, RSUs)
-
-        # Initially set to not having made a decision
-        decision_made = False
-        
-        # RSU offloading check first
-        for rsu in valid_rsus:
-            if latencies['RSU_latency'] <= task['max_latency_ms'] and rsu_task_counts[rsu['rsu_id']] < RSUs[rsu['rsu_id']]['max_tasks']:
-                offloading_decisions.append({
-                    'vu_id': vu_id, 'task_id': task['id'],
-                    'offloading_type': 'RSU', 'estimated_latency_ms': latencies['RSU_latency'],
-                    'rsu_id': rsu['rsu_id']  # Include RSU ID for clarity
-                })
-                rsu_task_counts[rsu['rsu_id']] += 1
-                total_latency = max(total_latency, latencies['RSU_latency'])
-                decision_made = True
-                break  # Assign to the first suitable RSU
-        
-        # HAP offloading check
-        if not decision_made and hap_task_count < HAP['max_tasks'] and latencies['HAP_latency'] <= task['max_latency_ms']:
-            offloading_decisions.append({
-                'vu_id': vu_id, 'task_id': task['id'],
-                'offloading_type': 'HAP', 'estimated_latency_ms': latencies['HAP_latency']
-            })
-            hap_task_count += 1
-            total_latency = max(total_latency, latencies['HAP_latency'])
-            decision_made = True
-
-        # VU processing as the last option
-        if not decision_made:
-            # Check if VU processing meets the latency requirement
-            if latencies['VU_latency'] <= task['max_latency_ms']:
-                offloading_decisions.append({
-                    'vu_id': vu_id, 'task_id': task['id'],
-                    'offloading_type': 'VU', 'estimated_latency_ms': latencies['VU_latency']
-                })
-                total_latency = max(total_latency, latencies['VU_latency'])
-                decision_made = True
-            else:
-                # Task goes into the priority queue if no offloading option is viable
-                heapq.heappush(task_priority_queue, (task['max_latency_ms'], {'vu_id': vu_id, 'task': task}))
-
-        print("tot late2:", total_latency)
-        
-    # Return the decisions, updated task counts for RSUs and HAP, the task priority queue and the total latency
-    return offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue, total_latency 
-
-def offload_remaining_tasks(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue):
-    # Reset counters 
-    rsu_task_counts = {rsu_id: 0 for rsu_id in RSUs}
-    hap_task_count = 0
-    # Temporary storage for offloading decisions
-    new_offloading_decisions = []
-    
-    # Work on a copy of the queue to avoid modifying the queue during iteration
-    tasks_to_revaluate = list(task_priority_queue)
-    print("tasks to reeval", tasks_to_revaluate)
-    
-    # Check if there are no tasks to reevaluate
-    if not tasks_to_revaluate:
-        print("No tasks to reevaluate, exiting function.")
-        return new_offloading_decisions, rsu_task_counts, hap_task_count
-    
-    # Clear the original priority queue and re-insert tasks if they still can't be offloaded
-    task_priority_queue.clear()
-
-    while tasks_to_revaluate:
-        # Pop the task with the highest priority (smallest max_latency_ms)
-        max_latency_ms, task_info = heapq.heappop(tasks_to_revaluate)
-        vu_id = task_info['vu_id']
-        task = task_info['task']
-        VU = VUs[vu_id]
-
-        # Calculate latencies for the current task
-        latencies = calculate_latency(task, VU, RSUs, HAP)
-        print("latency:", latencies)
-        valid_rsus = find_valid_rsu(VU, RSUs)
-        print("valid rsu:", valid_rsus)
-
-        # Initially set to not having made a decision
-        decision_made = False
-
-        # Attempt RSU offloading again
-        for rsu in valid_rsus:
-            if latencies['RSU_latency'] <= task['max_latency_ms'] and rsu_task_counts[rsu['rsu_id']] < RSUs[rsu['rsu_id']]['max_tasks']:
-                new_offloading_decisions.append({
-                    'vu_id': vu_id, 'task_id': task['id'],
-                    'offloading_type': 'RSU', 'estimated_latency_ms': latencies['RSU_latency'],
-                    'rsu_id': rsu['rsu_id']
-                })
-                rsu_task_counts[rsu['rsu_id']] += 1
-                decision_made = True
-                break
-
-        # Attempt HAP offloading again
-        if not decision_made and hap_task_count < HAP['max_tasks'] and latencies['HAP_latency'] <= task['max_latency_ms']:
-            new_offloading_decisions.append({
-                'vu_id': vu_id, 'task_id': task['id'],
-                'offloading_type': 'HAP', 'estimated_latency_ms': latencies['HAP_latency']
-            })
-            hap_task_count += 1
-            decision_made = True
-
-        # Attempt local VU processing again
-        if not decision_made and latencies['VU_latency'] <= task['max_latency_ms']:
-            new_offloading_decisions.append({
-                'vu_id': vu_id, 'task_id': task['id'],
-                'offloading_type': 'VU', 'estimated_latency_ms': latencies['VU_latency']
-            })
-            decision_made = True
-
-        # If no offloading option is viable, push the task back into the priority queue
-        if not decision_made:
-            heapq.heappush(task_priority_queue, (task['max_latency_ms'], {'vu_id': vu_id, 'task': task}))
-
-    # Return the new offloading decisions and updated task counts
-    return new_offloading_decisions, rsu_task_counts, hap_task_count
-
-
-
-import time
-
-def simulate(VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, total_simulation_time_ms):
-    global total_latency
-    current_time_ms = 504.4
-    timestep_ms = 504.4
-    
-    offloading_decisions, rsu_task_counts, hap_task_count, task_priority_queue, total_latency = offload_tasks_sorted(
-    VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, total_latency
-    )
-    print("Updated Total Latency:", total_latency)
-
-    # Print offloading decisions for review
-    for decision in offloading_decisions:
-        print(decision,'\n')
-
-    # Continue the simulation for the specified total simulation time
-    while current_time_ms <= total_simulation_time_ms and task_priority_queue:
-        
-        print("Current simulation time (ms):", current_time_ms)
-
-        # Update vehicle positions at each timestep
-        update_vehicle_positions(VUs, timestep_ms / 1000.0)  # Convert ms to seconds for elapsed_time_sec
-        print("update vec pos:", update_vehicle_positions)
-
-        # Offload tasks that are currently in the priority queue
-        offloading_decisions, rsu_task_counts, hap_task_count = offload_remaining_tasks(
-            VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue
-        )
-        
-        # Check if the simulation time has exceeded the current total latency
-        if current_time_ms >= total_latency:
-            # Find the maximum latency from all decisions made at this point
-            max_task_latency = max(decision['estimated_latency_ms'] for decision in offloading_decisions)
+    return VUs
             
-            # Update the total_latency if the new max_task_latency is greater
-            total_latency = total_latency + max_task_latency
+def update_graph(G, VUs, RSUs, HAP):
+    # Remove unnecessary edges first
+    edges_to_remove = [edge for edge in G.edges(data=True) if 'RSU' in edge[1] or edge[1] == 'HAP']
+    G.remove_edges_from(edges_to_remove)
 
-        # Debug outputs to trace the simulation state
-        print(offloading_decisions)
-        print("RSU task counts:", rsu_task_counts)
-        print("HAP task count:", hap_task_count)
-        print("tot late:", total_latency)
+    # Process each node correctly based on its type
+    for task_node in list(G.nodes()):
+        if task_node.startswith('RSU') or task_node == 'HAP':
+            # These are not VU task nodes, skip processing
+            continue
 
-        # Wait for the next time step
-        time.sleep(timestep_ms / 1000.0)  # Convert milliseconds to seconds for sleep function
-        current_time_ms += timestep_ms
+        # The format is 'VU_1_Task 1', split by '_' and extract 'VU_1' as vu_id
+        parts = task_node.split('_')
+        if len(parts) < 3:
+            print(f"Invalid task node format: {task_node}")
+            continue
+        
+        vu_id = '_'.join(parts[:2])  # Join the first two parts to form VU_id e.g., 'VU_1'
+        task_id = '_'.join(parts[2:])  # The rest is the task_id e.g., 'Task 1'
 
-    # Return the final state of the system
-    return rsu_task_counts, hap_task_count, task_priority_queue
+        if vu_id not in VUs:
+            print(f"Error: VU ID {vu_id} from task node {task_node} not found in VUs.")
+            continue
 
+        vu = VUs[vu_id]
+        task = next((t for t in vu['tasks'] if t['id'] == task_id), None)
 
-for vu_id, VU in VUs.items():
-    valid_rsu_results = find_valid_rsu(VU, RSUs)
-    print(f"Results for {vu_id}:")
-    for result in valid_rsu_results:
-        print(f"  RSU {result['rsu_id']} is valid with sojourn time {result['sojourn_time']} ms and distance to leave coverage {result['distance_to_leave_coverage']} meters.")
+        if task:  # Ensure the task exists
+            latencies = calculate_latency(task, vu, RSUs, HAP)
+            
+            # Reconnect RSUs and HAP if conditions are met
+            for rsu_id, rsu in RSUs.items():
+                valid_rsu = find_valid_rsu(vu, RSUs)
+                if valid_rsu and latencies['RSU_latency'] <= task['max_latency_ms']:
+                    G.add_edge(task_node, rsu_id, weight=latencies['RSU_latency'], type='RSU')
 
+            if latencies['HAP_latency'] <= task['max_latency_ms']:
+                G.add_edge(task_node, "HAP", weight=latencies['HAP_latency'], type='HAP')
+    
+    return G
 
-rsu_task_counts_final, hap_task_count_final, task_priority_queue_final = simulate(
-    VUs, RSUs, HAP, rsu_task_counts, hap_task_count, task_priority_queue, total_simulation_time_ms=55000
-)
-
-print("done")
-print(task_priority_queue)
+while graph.number_of_edges() > 0:
+    solution, offloaded_any = generate_initial_solution(graph)
+    update_vehicle_positions(VUs, 504.5/1000)
+    update_graph(graph, VUs, RSUs, HAP)
+    
+    if not offloaded_any:
+        print("No more tasks can be offloaded due to capacity limits.")
+        break
+    
+    print("\nTasks offloaded in this timestep:", solution)
