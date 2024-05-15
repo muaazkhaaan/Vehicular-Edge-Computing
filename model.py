@@ -2,7 +2,7 @@ import random
 
 # Define constants
 VU_m = 10  # Number of Vehicle Users (VUs)
-RSU_n = 20  # Number of Roadside Units (RSUs)
+RSU_n = 8  # Number of Roadside Units (RSUs)
 l = 1000  # Road length in meters
 VU_speed = 6  # Speed of VUs in m/s
 VU_GFLOPS = 8  # GFLOPS for VUs
@@ -19,8 +19,8 @@ def initialise_VUs():
         'direction': random.choice(['left', 'right']),
         'tasks': [{
             'id': f'Task {j+1}',
-            # 'size_MB': random.randint(1, 5), # Task size in Mb
-            'size_MB': 1, # Task size in Mb for tests 
+            'size_MB': random.randint(1, 5), # Task size in Mb
+            # 'size_MB': 1, # Task size in Mb for tests 
             'max_latency_ms': random.randint(300, 10000) # Max latency of task
         } 
         # for j in range(random.randint(1, max_tasks_per_VU))], # For random task generation
