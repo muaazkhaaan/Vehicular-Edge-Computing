@@ -6,3 +6,5 @@ Run the main.py file to run the algorithm it returns the alpha value passed in, 
 To edit the runs you can run the test function in main.py. 
 Alternatively, you can edit the values in model.py to get results.
 This is how the testing was done during the benchmarking process.
+
+The corresponding dissertation to this project can be provided upon request.
